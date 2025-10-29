@@ -1,77 +1,92 @@
 import requests
 import json
 from datetime import datetime
-
-FILE_PATH = "nse_stock_list.json"
+import time
 
 NSE_BASE = "https://www.nseindia.com"
-NSE_API_URL = f"{NSE_BASE}/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
+API_URL = f"{NSE_BASE}/api/corporate-announcements"
+CACHE_FILE = "nse_cache.json"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "*/*",
+    "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
 }
 
-def get_all_stocks():
-    session = requests.Session()
-    # Step 1: visit homepage to get cookies
-    home = session.get(NSE_BASE, headers=HEADERS, timeout=15)
-    if home.status_code != 200:
-        raise ValueError(f"Failed to initialize session, status {home.status_code}")
+def init_session():
+    s = requests.Session()
+    s.get(NSE_BASE, headers=HEADERS, timeout=15)
+    time.sleep(2)
+    return s
 
-    # Step 2: get actual stock data
-    api_headers = HEADERS.copy()
-    api_headers["Referer"] = "https://www.nseindia.com/market-data/live-equity-market"
-    response = session.get(NSE_API_URL, headers=api_headers, timeout=15)
+def fetch_announcements(session, size=50):
+    resp = session.get(API_URL, params={"index": "0", "size": str(size)}, headers=HEADERS, timeout=20)
+    
+    if resp.status_code != 200:
+        print(f"Error: {resp.status_code}")
+        return None
+    
+    data = resp.json().get("data", [])
+    announcements = []
+    
+    for item in data:
+        att = item.get("attchmntFile", "")
+        announcements.append({
+            "symbol": item.get("symbol"),
+            "company_name": item.get("companyName"),
+            "subject": item.get("desc"),
+            "details": item.get("smInf"),
+            "broadcast_date": item.get("an_dt"),
+            "attachment_link": f"https://nsearchives.nseindia.com{att}" if att else None,
+            "attachment_size": item.get("attchmntSize")
+        })
+    
+    return announcements
 
-    if response.status_code != 200:
-        raise ValueError(f"Request failed with status {response.status_code}")
+def save_cache(announcements):
+    with open(CACHE_FILE, "w") as f:
+        json.dump({
+            "timestamp": datetime.now().isoformat(),
+            "filings": announcements
+        }, f, indent=2)
 
-    data = response.json()
-    stocks = [item["symbol"] for item in data.get("data", [])]
-    if not stocks:
-        raise ValueError("No stock data received.")
-    return stocks
-
-def save_stock_list(stocks):
-    with open(FILE_PATH, "w") as f:
-        json.dump({"timestamp": datetime.now().isoformat(), "symbols": stocks}, f, indent=2)
-
-def load_old_stock_list():
+def load_cache():
     try:
-        with open(FILE_PATH, "r") as f:
-            return json.load(f)["symbols"]
-    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f).get("filings", [])
+    except:
         return []
 
+def find_new(old, new):
+    old_ids = {f"{f['symbol']}_{f['broadcast_date']}_{f['subject']}" for f in old}
+    return [f for f in new if f"{f['symbol']}_{f['broadcast_date']}_{f['subject']}" not in old_ids]
+
 def main():
-    try:
-        current_stocks = get_all_stocks()
-    except Exception as e:
-        print("⚠️ Error fetching data from NSE:", e)
+    print("Fetching NSE announcements...")
+    
+    session = init_session()
+    current = fetch_announcements(session, 50)
+    
+    if not current:
+        print("Failed to fetch data")
         return
-
-    old_stocks = load_old_stock_list()
-    new_listings = [s for s in current_stocks if s not in old_stocks]
-
-    if new_listings:
-        print("🆕 New listings in the last 24 hours:")
-        for s in new_listings:
-            print(" -", s)
+    
+    old = load_cache()
+    new = find_new(old, current)
+    
+    if new:
+        print(f"\n🆕 {len(new)} NEW ANNOUNCEMENTS:\n")
+        for f in new:
+            print(f"{f['symbol']:12s} | {f['broadcast_date']} | {f['subject'][:60]}")
     else:
-        print("No new listings found.")
-
-    save_stock_list(current_stocks)
+        print("No new announcements")
+    
+    print(f"\nLatest 5:")
+    for f in current[:5]:
+        print(f"{f['symbol']:12s} | {f['broadcast_date']} | {f['subject'][:60]}")
+    
+    save_cache(current)
+    print(f"\nSaved {len(current)} announcements")
 
 if __name__ == "__main__":
     main()
