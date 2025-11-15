@@ -1,3 +1,5 @@
+# Ignore local environment files with secrets
+.env.local
 __pycache__/
 *.pyc
 .env
