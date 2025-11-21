@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: stockalert-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: PORT
+        value: 5000
+    autoDeploy: true
