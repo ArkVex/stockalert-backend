@@ -51,6 +51,12 @@ def load_env_file(path='.env.local'):
 
 
 def build_payload(template_name, to, customer, company, price, update_text):
+    # Ensure all text values are non-empty
+    customer = str(customer).strip() if customer else 'Customer'
+    company = str(company).strip() if company else 'N/A'
+    price = str(price).strip() if price else 'N/A'
+    update_text = str(update_text).strip() if update_text else 'No update available'
+    
     payload = {
         "messaging_product": "whatsapp",
         "to": str(to),
@@ -62,10 +68,10 @@ def build_payload(template_name, to, customer, company, price, update_text):
                 {
                     "type": "body",
                     "parameters": [
-                        {"type": "text", "parameter_name": "customer", "text": str(customer)},
-                        {"type": "text", "parameter_name": "company", "text": str(company)},
-                        {"type": "text", "parameter_name": "price", "text": str(price)},
-                        {"type": "text", "parameter_name": "update", "text": str(update_text)}
+                        {"type": "text", "text": customer},
+                        {"type": "text", "text": company},
+                        {"type": "text", "text": price},
+                        {"type": "text", "text": update_text}
                     ]
                 }
             ]
@@ -76,13 +82,22 @@ def build_payload(template_name, to, customer, company, price, update_text):
 
 def build_template_payload(template_name, to, parameters):
     # parameters: list of (name, text) tuples or dicts
+    # Note: name is ignored - WhatsApp matches by position only
     params = []
     for p in parameters:
         if isinstance(p, dict):
-            params.append({"type": "text", "parameter_name": p.get('name'), "text": str(p.get('text'))})
+            # Ensure text value is not empty
+            text_value = str(p.get('text', 'N/A')).strip()
+            if not text_value:
+                text_value = 'N/A'
+            params.append({"type": "text", "text": text_value})
         else:
             name, text = p
-            params.append({"type": "text", "parameter_name": name, "text": str(text)})
+            # Ensure text value is not empty
+            text_value = str(text).strip() if text else 'N/A'
+            if not text_value:
+                text_value = 'N/A'
+            params.append({"type": "text", "text": text_value})
 
     payload = {
         "messaging_product": "whatsapp",
@@ -156,12 +171,13 @@ def main():
     parser.add_argument('--token', help='WhatsApp API bearer token')
     parser.add_argument('--phone-id', help='WhatsApp Business Phone ID (numeric)')
     parser.add_argument('--to', help='Destination phone number with country code (e.g., 918081489340). If omitted, script will use customers list from DB')
-    parser.add_argument('--template', default=os.environ.get('TEMPLATE_NAME', 'stockupdate'), help='Template name')
+    parser.add_argument('--template', default=os.environ.get('TEMPLATE_NAME', 'stockupdate1'), help='Template name')
     parser.add_argument('--company-id', help='Company _id to read from last_hour/company-map (required)')
     parser.add_argument('--customer', default=None, help='Customer display name to use when sending (optional)')
     parser.add_argument('--mongo-uri', help='MongoDB URI (overrides MONGO_URI env var)')
     parser.add_argument('--dry-run', action='store_true', help='Do not send messages; print payloads')
     parser.add_argument('--check-only', action='store_true', help='Only run validations and print status; do not send')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose output with debug info')
     args = parser.parse_args()
 
     # Load .env.local if present
@@ -283,6 +299,10 @@ def main():
 
         payload = build_template_payload(template_name, to, params)
 
+        if args.verbose:
+            print(f'→ Payload for {to}:')
+            print(json.dumps(payload, indent=2))
+
         if args.dry_run:
             print('DRY RUN payload for', to)
             print(json.dumps(payload, indent=2))
@@ -291,7 +311,8 @@ def main():
         try:
             resp = send_message(token, phone_id, payload)
             print(f'✓ Message sent to {to}:')
-            print(json.dumps(resp, indent=2))
+            if args.verbose:
+                print(json.dumps(resp, indent=2))
         except requests.HTTPError as he:
             print(f'✗ HTTP error sending message to {to}:')
             try:

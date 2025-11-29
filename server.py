@@ -220,6 +220,39 @@ def api_send():
     return jsonify({'success': success, 'result': result})
 
 
+@app.route('/api/summarize_hour', methods=['POST', 'GET'])
+def api_summarize_hour():
+    """Run summarize_hour.py and return output.
+    
+    Processes last_hour collection and saves summaries to hourly_summaries collection.
+    Each document contains: company, price, current_price, update, update_summary.
+    
+    Query params:
+      - limit: Limit number of companies to process (optional, default 0 = all)
+      - verbose: if 'true', adds --verbose flag
+      - send: if 'true', sends WhatsApp messages to recipients
+      - recipients: comma-separated phone numbers (e.g., 918081489340,919999999999)
+      - template: WhatsApp template name (default: stockupdate1)
+    """
+    limit = request.args.get('limit', '0')
+    verbose = request.args.get('verbose', '').lower() == 'true'
+    send = request.args.get('send', '').lower() == 'true'
+    recipients = request.args.get('recipients', '')
+    template = request.args.get('template', 'stockupdate1')
+    
+    args = ['--limit', str(limit), '--template', template]
+    if verbose:
+        args.append('--verbose')
+    if send:
+        args.append('--send')
+    if recipients:
+        args += ['--recipients', recipients]
+    
+    result = run_script(os.path.join(os.getcwd(), 'scripts', 'summarize_hour.py'), args=args)
+    success = result['returncode'] == 0
+    return jsonify({'success': success, 'result': result})
+
+
 @app.route('/api/run_all', methods=['POST', 'GET'])
 def api_run_all():
     """Run full pipeline: scrape -> summarize -> send. Returns all outputs."""
@@ -227,6 +260,50 @@ def api_run_all():
     # success if all return 0
     success = all(r.get('returncode') == 0 for r in results.values())
     return jsonify({'success': success, 'results': results})
+
+
+@app.route('/api/broadcast', methods=['POST', 'GET'])
+def api_broadcast():
+    """Broadcast a template message to all contacts in database.
+    
+    Query params:
+    - company (required): Company name
+    - price (required): Price info
+    - update (required): Update text
+    - customer (optional): Default customer name
+    - template (optional): Template name (default: stockupdate1)
+    - dry_run (optional): If true, don't send messages
+    - verbose (optional): Verbose output
+    """
+    company = request.args.get('company', '')
+    price = request.args.get('price', '')
+    update = request.args.get('update', '')
+    customer = request.args.get('customer', 'Customer')
+    template = request.args.get('template', 'stockupdate1')
+    dry_run = request.args.get('dry_run', '').lower() == 'true'
+    verbose = request.args.get('verbose', '').lower() == 'true'
+    
+    if not company or not price or not update:
+        return jsonify({
+            'success': False, 
+            'error': 'Missing required parameters: company, price, update'
+        }), 400
+    
+    args = [
+        '--company', company,
+        '--price', price,
+        '--update', update,
+        '--customer', customer,
+        '--template', template
+    ]
+    if dry_run:
+        args.append('--dry-run')
+    if verbose:
+        args.append('--verbose')
+    
+    result = run_script(os.path.join(os.getcwd(), 'scripts', 'broadcast_message.py'), args=args)
+    success = result['returncode'] == 0
+    return jsonify({'success': success, 'result': result})
 
 
 if __name__ == "__main__":

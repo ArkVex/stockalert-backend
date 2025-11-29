@@ -1,20 +1,21 @@
 """Clean summarizer for last_hour documents.
 
 This script reads the transient `last_hour` collection (created by
-`nse_scrapper.py`), downloads PDF attachments, extracts text, creates a
-short summary, and upserts structured fields required by the
-WhatsApp template into three places:
+`nse_scrapper.py`), downloads PDF attachments for companies that have NOT
+been summarized yet, extracts text, creates a short summary, and updates
+ONLY the `last_hour` collection with structured fields required by the
+WhatsApp template.
 
-- `company-map` (under `announcement.*`)
-- `last_hour` (updates `latest.*` for the company)
-- `summary-map` (a concise record for quick lookups)
+The template fields added/updated in `last_hour.latest.*`:
+- latest.update (short summary)
+- latest.summary (same as update)
+- latest.current_price (string or None)
+- latest.whatsapp_template (template message with {{customer}} placeholder)
+- latest.customers (empty list)
+- latest.attachment_processed (true after processing)
 
-The template fields added/updated are:
-- announcement.update (short summary)
-- announcement.summary (same as update)
-- announcement.current_price (string or None)
-- announcement.whatsapp (ready-to-send message using a `{{customer}}` placeholder)
-- announcement.customers (empty list)
+Skips companies where `latest.attachment_processed` is already true or
+`latest.summary` exists.
 
 Environment variables (or use .env.local):
 - MONGO_URI (or MONGODB_URI)
@@ -36,6 +37,12 @@ from urllib.parse import urljoin
 from PyPDF2 import PdfReader
 import argparse
 import re
+
+# Force UTF-8 encoding for stdout/stderr to prevent UnicodeEncodeError on Windows
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 
 def load_env_file(path='.env.local'):
@@ -253,20 +260,27 @@ def main():
         sys.exit(2)
 
     last_coll = db['last_hour']
-    main_coll = db['company-map']
-    summary_coll = db['summary-map']
 
     session = requests.Session()
     session.headers.update({'User-Agent': 'Mozilla/5.0', 'Accept': '*/*'})
 
     try:
-        docs = list(last_coll.find())
+        # Only fetch documents that haven't been summarized yet
+        # Check if latest.summary or latest.attachment_processed is missing/false
+        docs = list(last_coll.find({
+            '$or': [
+                {'latest.attachment_processed': {'$ne': True}},
+                {'latest.summary': {'$exists': False}},
+                {'latest.summary': None},
+                {'latest.summary': ''}
+            ]
+        }))
     except Exception as e:
         print(f'ERROR: Could not read last_hour collection: {e}')
         sys.exit(3)
 
     total_docs = len(docs)
-    print(f'Found {total_docs} documents in last_hour')
+    print(f'Found {total_docs} unsummarized documents in last_hour')
     if args.limit and args.limit > 0:
         docs = docs[:args.limit]
     verbose = args.verbose
@@ -280,9 +294,7 @@ def main():
         'extraction_empty': 0,
         'summaries_success': 0,
         'summaries_failed': 0,
-        'company_map_errors': 0,
         'last_hour_errors': 0,
-        'summary_map_errors': 0,
     }
 
     for doc in docs:
@@ -336,39 +348,16 @@ def main():
 
             now = datetime.utcnow()
 
-            # Build template message and filled whatsapp text
+            # Build template message
             tpl, whatsapp_msg = build_template_message(company, price_str, summary, attachment)
 
-            # Upsert into company-map
-            try:
-                up = {
-                    '$set': {
-                        'announcement.summary': summary,
-                        'announcement.update': summary,
-                        # Do not store full filled WhatsApp message to DB (privacy/size).
-                        # Store only the template with placeholders and structured fields.
-                        'announcement.whatsapp_template': tpl,
-                        'announcement.current_price': price_str,
-                        'announcement.customers': [],
-                        'announcement.summary_at': now,
-                        'announcement.attachment_processed': True,
-                        'announcement.attachment_url': attachment,
-                    }
-                }
-                main_coll.update_one({'_id': company}, up, upsert=True)
-                if verbose:
-                    print(f'  ✓ updated company-map for {company}')
-            except Exception as e:
-                print(f'  ✗ failed to update company-map for {company}: {e}')
-                counters['company_map_errors'] += 1
-
-            # Update transient last_hour latest node
+            # ONLY update last_hour collection with summary results
             try:
                 last_up = {
                     '$set': {
                         'latest.summary': summary,
                         'latest.update': summary,
-                        # Do not save the full filled WhatsApp message here.
+                        'latest.whatsapp_template': tpl,
                         'latest.price': price_str,
                         'latest.current_price': price_str,
                         'latest.customers': [],
@@ -383,47 +372,22 @@ def main():
                 print(f'  ✗ failed to update last_hour for {company}: {e}')
                 counters['last_hour_errors'] += 1
 
-            # Insert/replace into summary-map
-            try:
-                summary_doc = {
-                    '_id': company,
-                    'company': company,
-                    'summary': summary,
-                    'update': summary,
-                    # Do not store the full filled WhatsApp message; keep template only
-                    'whatsapp_template': tpl,
-                    'attachment_url': attachment,
-                    'current_price': price_str,
-                    'customers': [],
-                    'source_timestamp': latest.get('Timestamp'),
-                    'processed_at': now,
-                    'success': True if summary else False,
-                }
-                summary_coll.update_one({'_id': company}, {'$set': summary_doc}, upsert=True)
-                if verbose:
-                    print(f'  ✓ upserted summary-map for {company}')
-            except Exception as e:
-                print(f'  ✗ failed to update summary-map for {company}: {e}')
-                counters['summary_map_errors'] += 1
-
         except Exception as e:
             print(f'Error processing company doc: {e}\n{traceback.format_exc()}')
             counters['summaries_failed'] += 1
 
     # Final summary and exit code
     print('\n=== Summary ===')
-    print(f"Total documents found: {counters['total']}")
+    print(f"Total unsummarized documents found: {counters['total']}")
     print(f"Processed: {counters['processed']}")
     print(f"Skipped (no attachment): {counters['skipped_no_attachment']}")
     print(f"Download failures: {counters['download_fail']}")
     print(f"Empty extraction: {counters['extraction_empty']}")
     print(f"Summaries succeeded: {counters['summaries_success']}")
     print(f"Summaries failed: {counters['summaries_failed']}")
-    print(f"company-map errors: {counters['company_map_errors']}")
-    print(f"last_hour errors: {counters['last_hour_errors']}")
-    print(f"summary-map errors: {counters['summary_map_errors']}")
+    print(f"last_hour update errors: {counters['last_hour_errors']}")
 
-    critical_failures = counters['download_fail'] + counters['summaries_failed'] + counters['company_map_errors'] + counters['last_hour_errors'] + counters['summary_map_errors']
+    critical_failures = counters['download_fail'] + counters['summaries_failed'] + counters['last_hour_errors']
     if critical_failures > 0:
         print('Exiting with error code 1 due to failures')
         sys.exit(1)
