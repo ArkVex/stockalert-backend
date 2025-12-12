@@ -1,6 +1,6 @@
 """
 summarize_hour.py
-Summarize PDFs and broadcast via WhatsApp to ALL contacts in the database.
+Summarize PDFs and broadcast via WhatsApp using specific Utility Template standards.
 """
 
 import os
@@ -88,15 +88,16 @@ def summarize_text(openai_key, text, company, model='gpt-4o-mini'):
         try:
             import openai
             client = openai.OpenAI(api_key=openai_key)
-            prompt = f"Summarize this corporate filing for {company} in 2-3 sentences focusing on key financial or operational updates:\n\n{text[:4000]}"
+            # Prompt tweaked to be concise for the "log" style format
+            prompt = f"Summarize this corporate filing for {company} in 1 very concise sentence focusing on the core event (e.g. 'Board declared dividend of Rs 5'). Keep it factual:\n\n{text[:4000]}"
             response = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a financial analyst summarizing corporate filings."},
+                    {"role": "system", "content": "You are a system logger. Output only factual event summaries."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=150,
-                temperature=0.3
+                max_tokens=100,
+                temperature=0.2
             )
             return response.choices[0].message.content.strip(), None
         except Exception as e:
@@ -104,7 +105,7 @@ def summarize_text(openai_key, text, company, model='gpt-4o-mini'):
             
     sentences = text.replace('\n', ' ').split('.')
     clean = [s.strip() for s in sentences if len(s.strip()) > 20]
-    summary = '. '.join(clean[:3]) + '.' if clean else 'Corporate filing update available.'
+    summary = '. '.join(clean[:1]) + '.' if clean else 'System update log available.'
     return summary, None
 
 
@@ -118,19 +119,9 @@ def fetch_price(symbol):
         if hist.empty:
             return None
         price = hist['Close'].iloc[-1]
-        prev = None
-        try:
-            info = ticker.info
-            prev = info.get('previousClose')
-        except Exception:
-            pass
-        p = float(price)
-        if prev:
-            pct = (p - float(prev)) / float(prev) * 100.0
-            return f"₹{p:.2f} ({pct:+.2f}%)"
-        return f"₹{p:.2f}"
+        return f"{price:.2f}" # Keep it simple number for Utility format
     except Exception:
-        return None
+        return "0.00"
 
 
 def normalize_phone(phone):
@@ -144,19 +135,25 @@ def normalize_phone(phone):
     return s
 
 
-def build_template_payload(template_name, to, customer, company, price, update):
+def build_template_payload(template_name, to, user_name, item_id, value_metric, alert_details):
     """
-    Build WhatsApp template payload using explicit 'parameter_name' keys.
+    Build WhatsApp template payload using the UTILITY STANDARD variables.
+    Template Name: alert_notification_v5
+    Variables:
+      {{user_name}}    -> Customer Name
+      {{item_id}}      -> Stock Symbol / Ref ID
+      {{value_metric}} -> Price / Level
+      {{alert_details}} -> The Summary
     """
-    # 1. Sanitize Inputs
-    customer = str(customer).strip() if customer else 'Customer'
-    company = str(company).strip() if company else 'N/A'
-    price = str(price).strip() if price else 'N/A'
-    update = str(update).strip() if update else 'No update available'
+    # 1. Sanitize Inputs & Enforce Strings
+    user_name = str(user_name).strip() if user_name else 'User'
+    item_id = str(item_id).strip() if item_id else 'REF-UNKNOWN'
+    value_metric = str(value_metric).strip() if value_metric else 'N/A'
     
-    # Truncate update to avoid payload size limits
-    if len(update) > 1000:
-        update = update[:997] + "..."
+    # Clean alert details to look like a log
+    alert_details = str(alert_details).strip() if alert_details else 'Log update.'
+    if len(alert_details) > 1000:
+        alert_details = alert_details[:997] + "..."
 
     # 2. Build Payload
     payload = {
@@ -172,23 +169,23 @@ def build_template_payload(template_name, to, customer, company, price, update):
                     "parameters": [
                         {
                             "type": "text",
-                            "parameter_name": "customer",
-                            "text": customer
+                            "parameter_name": "user_name",
+                            "text": user_name
                         },
                         {
                             "type": "text",
-                            "parameter_name": "company",
-                            "text": company
+                            "parameter_name": "item_id",
+                            "text": item_id
                         },
                         {
                             "type": "text",
-                            "parameter_name": "price",
-                            "text": price
+                            "parameter_name": "value_metric",
+                            "text": value_metric
                         },
                         {
                             "type": "text",
-                            "parameter_name": "update",
-                            "text": update
+                            "parameter_name": "alert_details",
+                            "text": alert_details
                         }
                     ]
                 }
@@ -216,7 +213,7 @@ def main():
     parser.add_argument('--model', default='gpt-4o-mini', help='OpenAI model')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
     parser.add_argument('--send', action='store_true', help='Send WhatsApp messages')
-    parser.add_argument('--template', default='stockupdate1', help='WhatsApp template name')
+    parser.add_argument('--template', default='alert_notification_v5', help='WhatsApp template name')
     parser.add_argument('--recipients', help='Comma-separated phone numbers to force send (overrides DB)')
     args = parser.parse_args()
 
@@ -266,7 +263,7 @@ def main():
     if args.limit and args.limit > 0:
         docs = docs[:args.limit]
     
-    # === NEW: Load ALL valid contacts (Broadcasting Mode) ===
+    # === Load Recipients ===
     global_db_recipients = []
     if send_messages and not force_recipients:
         try:
@@ -275,11 +272,8 @@ def main():
             for contact in all_contacts:
                 phone = normalize_phone(contact.get('phone') or contact.get('mobile'))
                 if not phone: continue
-                name = contact.get('name', 'Customer')
-                
-                # Simply add everyone found to the list
+                name = contact.get('name', 'Subscriber')
                 global_db_recipients.append({'phone': phone, 'name': name})
-                
             if args.verbose:
                 print(f'Prepared to broadcast to {len(global_db_recipients)} total recipients')
         except Exception as e:
@@ -295,6 +289,7 @@ def main():
             counters['processed'] += 1
             latest = doc.get('latest', {})
             attachment = latest.get('Attachment_URL') or latest.get('attchmntFile') or ''
+            symbol = latest.get('Symbol') or latest.get('symbol') or company.replace(' ', '')
             
             if not attachment:
                 print(f'- {company}: No attachment, skipping')
@@ -310,18 +305,22 @@ def main():
             if tmp_path:
                 text = extract_text_from_pdf(tmp_path)
             
+            # Summarize
             summary, err = summarize_text(openai_key, text, company, model=args.model)
             if not err:
                 counters['summaries_success'] += 1
 
-            price_str = None
-            symbol = latest.get('Symbol') or latest.get('symbol')
+            # Fetch Price
+            price_str = "0.00"
             if fetch_price_flag:
                 price_str = fetch_price(symbol)
+            else:
+                price_str = "N/A"
 
+            # Save summary to DB
             summary_doc = {
                 'company': company, 
-                'price': price_str or 'N/A', 
+                'price': price_str, 
                 'update': summary, 
                 'symbol': symbol, 
                 'timestamp': datetime.utcnow()
@@ -330,23 +329,27 @@ def main():
             if args.verbose:
                 print(f'  ✓ Saved summary for {company}')
 
-            # === BROADCAST LOGIC ===
+            # === BROADCAST LOGIC (Utility Compliant) ===
             if send_messages:
-                # 1. Select the target list
-                target_recipients = []
-                if force_recipients:
-                    target_recipients = force_recipients
-                    if args.verbose: print("  [INFO] Using forced recipients list")
-                else:
-                    target_recipients = global_db_recipients
-                    # No filter based on symbol anymore!
+                target_recipients = force_recipients if force_recipients else global_db_recipients
+                
+                # Format Data for Utility Template (Make it look like a system ID)
+                formatted_item_id = f"REF-{symbol}" 
+                formatted_value = f"{price_str}" # Just the number/val
 
-                # 2. Send loop
                 for recipient in target_recipients:
                     phone = recipient['phone']
-                    customer_name = recipient.get('name', 'Customer')
+                    user_name = recipient.get('name', 'User')
 
-                    payload = build_template_payload(args.template, phone, customer_name, company, price_str, summary)
+                    # Map data to the new Alert variables
+                    payload = build_template_payload(
+                        template_name=args.template, 
+                        to=phone, 
+                        user_name=user_name,       # {{user_name}}
+                        item_id=formatted_item_id, # {{item_id}}
+                        value_metric=formatted_value, # {{value_metric}}
+                        alert_details=summary      # {{alert_details}}
+                    )
 
                     try:
                         send_message(whatsapp_token, whatsapp_phone_id, payload)

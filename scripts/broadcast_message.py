@@ -90,7 +90,7 @@ def main():
     parser.add_argument('--mongo-uri', help='MongoDB URI (overrides MONGO_URI env var)')
     parser.add_argument('--token', help='WhatsApp API bearer token')
     parser.add_argument('--phone-id', help='WhatsApp Business Phone ID')
-    parser.add_argument('--template', default='stockupdate1', help='Template name')
+    parser.add_argument('--template', default='update1', help='Template name')
     parser.add_argument('--customer', default='Customer', help='Customer name')
     parser.add_argument('--company', required=True, help='Company name')
     parser.add_argument('--price', required=True, help='Price info')

@@ -232,13 +232,13 @@ def api_summarize_hour():
       - verbose: if 'true', adds --verbose flag
       - send: if 'true', sends WhatsApp messages to recipients
       - recipients: comma-separated phone numbers (e.g., 918081489340,919999999999)
-      - template: WhatsApp template name (default: stockupdate1)
+      - template: WhatsApp template name (default: update1)
     """
     limit = request.args.get('limit', '0')
     verbose = request.args.get('verbose', '').lower() == 'true'
     send = request.args.get('send', '').lower() == 'true'
     recipients = request.args.get('recipients', '')
-    template = request.args.get('template', 'stockupdate1')
+    template = request.args.get('template', 'update1')
     
     args = ['--limit', str(limit), '--template', template]
     if verbose:
@@ -271,7 +271,7 @@ def api_broadcast():
     - price (required): Price info
     - update (required): Update text
     - customer (optional): Default customer name
-    - template (optional): Template name (default: stockupdate1)
+    - template (optional): Template name (default: update1)
     - dry_run (optional): If true, don't send messages
     - verbose (optional): Verbose output
     """
@@ -279,7 +279,7 @@ def api_broadcast():
     price = request.args.get('price', '')
     update = request.args.get('update', '')
     customer = request.args.get('customer', 'Customer')
-    template = request.args.get('template', 'stockupdate1')
+    template = request.args.get('template', 'update1')
     dry_run = request.args.get('dry_run', '').lower() == 'true'
     verbose = request.args.get('verbose', '').lower() == 'true'
     

@@ -171,7 +171,7 @@ def main():
     parser.add_argument('--token', help='WhatsApp API bearer token')
     parser.add_argument('--phone-id', help='WhatsApp Business Phone ID (numeric)')
     parser.add_argument('--to', help='Destination phone number with country code (e.g., 918081489340). If omitted, script will use customers list from DB')
-    parser.add_argument('--template', default=os.environ.get('TEMPLATE_NAME', 'stockupdate1'), help='Template name')
+    parser.add_argument('--template', default=os.environ.get('TEMPLATE_NAME', 'update1'), help='Template name')
     parser.add_argument('--company-id', help='Company _id to read from last_hour/company-map (required)')
     parser.add_argument('--customer', default=None, help='Customer display name to use when sending (optional)')
     parser.add_argument('--mongo-uri', help='MongoDB URI (overrides MONGO_URI env var)')
