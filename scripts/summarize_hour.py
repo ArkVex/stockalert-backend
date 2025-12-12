@@ -263,19 +263,26 @@ def main():
     if args.limit and args.limit > 0:
         docs = docs[:args.limit]
     
-    # === Load Recipients ===
-    global_db_recipients = []
+    # === Load Recipients by Symbol ===
+    contacts_by_symbol = {}
     if send_messages and not force_recipients:
         try:
             all_contacts = list(contacts_coll.find())
             print(f'Found {len(all_contacts)} contacts in database')
+            # Build a map: symbol -> list of contacts interested in that symbol
             for contact in all_contacts:
                 phone = normalize_phone(contact.get('phone') or contact.get('mobile'))
-                if not phone: continue
+                if not phone:
+                    continue
                 name = contact.get('name', 'Subscriber')
-                global_db_recipients.append({'phone': phone, 'name': name})
+                # Get the list of selected companies/symbols
+                selected = contact.get('profile', {}).get('selectedCompanies', [])
+                for symbol in selected:
+                    if symbol not in contacts_by_symbol:
+                        contacts_by_symbol[symbol] = []
+                    contacts_by_symbol[symbol].append({'phone': phone, 'name': name})
             if args.verbose:
-                print(f'Prepared to broadcast to {len(global_db_recipients)} total recipients')
+                print(f'Loaded contacts for {len(contacts_by_symbol)} unique symbols')
         except Exception as e:
             print(f'WARNING: Could not load contacts: {e}')
 
@@ -329,13 +336,33 @@ def main():
             if args.verbose:
                 print(f'  ✓ Saved summary for {company}')
 
-            # === BROADCAST LOGIC (Utility Compliant) ===
+            # === BROADCAST LOGIC (Filtered by selected companies) ===
             if send_messages:
-                target_recipients = force_recipients if force_recipients else global_db_recipients
+                # If force_recipients provided via CLI, use those
+                # Otherwise, get contacts who subscribed to this symbol OR company name
+                if force_recipients:
+                    target_recipients = force_recipients
+                else:
+                    # Check both symbol (e.g., "INFY") and full company name (e.g., "Eros International Media Limited")
+                    recipients_by_symbol = contacts_by_symbol.get(symbol, []) if symbol else []
+                    recipients_by_company = contacts_by_symbol.get(company, []) if company else []
+                    
+                    # Combine and deduplicate by phone number
+                    seen_phones = set()
+                    target_recipients = []
+                    for r in recipients_by_symbol + recipients_by_company:
+                        if r['phone'] not in seen_phones:
+                            seen_phones.add(r['phone'])
+                            target_recipients.append(r)
+                    
+                    if args.verbose and target_recipients:
+                        names = ', '.join([r['name'] for r in target_recipients[:3]])
+                        more = f' and {len(target_recipients)-3} more' if len(target_recipients) > 3 else ''
+                        print(f'  → Sending to {len(target_recipients)} subscriber(s): {names}{more}')
                 
-                # Format Data for Utility Template (Make it look like a system ID)
+                # Format Data for Template
                 formatted_item_id = f"REF-{symbol}" 
-                formatted_value = f"{price_str}" # Just the number/val
+                formatted_value = f"{price_str}"
 
                 for recipient in target_recipients:
                     phone = recipient['phone']
